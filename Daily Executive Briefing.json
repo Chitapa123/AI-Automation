@@ -1,0 +1,333 @@
+{
+  "name": "Daily Executive Briefing",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "a1fc368a-1039-46fe-9e24-e6fac38b8829",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        -160
+      ],
+      "notesInFlow": true,
+      "notes": "Use this to test the workflow manually before enabling the schedule"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 8
+            }
+          ]
+        }
+      },
+      "id": "841fbdf0-7831-44f1-9121-6dc11f1ed5db",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -336,
+        144
+      ],
+      "notesInFlow": true,
+      "notes": "Runs daily at 8:00 AM. Adjust the cron expression for your timezone. Format: minute hour day month weekday"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "calendar": {
+          "__rl": true,
+          "value": "YOUR_CALENDAR_EMAIL",
+          "mode": "list",
+          "cachedResultName": "YOUR_CALENDAR_EMAIL"
+        },
+        "limit": 20,
+        "options": {
+          "timeMin": "={{ $now.startOf('day').toISO() }}",
+          "timeMax": "={{ $now.endOf('day').toISO() }}",
+          "singleEvents": true
+        }
+      },
+      "id": "dde76431-af97-4a9a-8e43-3a1af15d0bac",
+      "name": "Google Calendar - Get Today's Events",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.2,
+      "position": [
+        -112,
+        96
+      ],
+      "notesInFlow": true,
+      "alwaysOutputData": false,
+      "credentials": {},
+      "notes": "Fetches all events for today from your primary Google Calendar. Connect your Google Calendar OAuth credentials here."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Consolidate emails and calendar events into structured format\nconst allItems = $input.all();\n\n// Separate emails and calendar events\nconst emails = [];\nconst calendarEvents = [];\n\nfor (const item of allItems) {\n  const data = item.json;\n  \n  // Check if it's an email (has 'from' and 'subject' fields)\n  if (data.from && data.subject) {\n    emails.push({\n      from: data.from?.value?.[0]?.address || data.from || 'Unknown',\n      fromName: data.from?.value?.[0]?.name || '',\n      subject: data.subject || 'No Subject',\n      date: data.date || '',\n      // REMOVED TRUNCATION: Captures the full text body\n      fullText: data.text || data.textPlain || ''\n    });\n  }\n  \n  // Check if it's a calendar event (has 'summary' and 'start' fields)\n  if (data.summary && (data.start || data.startTime)) {\n    const startTime = data.start?.dateTime || data.startTime || data.start?.date || '';\n    const endTime = data.end?.dateTime || data.endTime || data.end?.date || '';\n    \n    calendarEvents.push({\n      title: data.summary || 'Untitled Event',\n      startTime: startTime,\n      endTime: endTime,\n      location: data.location || '',\n      // REMOVED TRUNCATION: Captures the full description\n      description: data.description || '',\n      attendees: data.attendees?.map(a => a.email).join(', ') || ''\n    });\n  }\n}\n\n// Sort calendar events by start time\ncalendarEvents.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));\n\nreturn [{\n  json: {\n    emailCount: emails.length,\n    eventCount: calendarEvents.length,\n    emails: emails,\n    calendarEvents: calendarEvents,\n    generatedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "ad5e2669-e8a6-4236-bd63-e6eefc3a5135",
+      "name": "Consolidate Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        336,
+        -16
+      ],
+      "notesInFlow": true,
+      "notes": "Parses and structures the email and calendar data into a clean format for the AI to process"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Format the briefing for Slack\nconst inputData = $input.first().json;\nconst consolidatedData = $('Consolidate Data').first().json;\n\n// Extract the AI-generated briefing\nlet briefing = '';\n\ntry {\n  // Handle different response structures from OpenAI node\n  if (inputData.message?.content) {\n    briefing = inputData.message.content;\n  } else if (inputData.text) {\n    briefing = inputData.text;\n  } else if (inputData.content) {\n    briefing = inputData.content;\n  } else if (typeof inputData === 'string') {\n    briefing = inputData;\n  } else {\n    briefing = JSON.stringify(inputData);\n  }\n} catch (error) {\n  briefing = 'Error generating briefing. Please check the workflow.';\n}\n\n// Get current date formatted nicely\nconst today = new Date();\nconst dateOptions = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };\nconst formattedDate = today.toLocaleDateString('en-US', dateOptions);\n\n// Create Slack-formatted message\nconst slackMessage = `*\ud83c\udf05 Daily Executive Briefing*\\n*${formattedDate}*\\n\\n---\\n\\n${briefing}\\n\\n---\\n_Generated at ${today.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })} \u2022 ${consolidatedData.emailCount} emails \u2022 ${consolidatedData.eventCount} events_`;\n\nreturn [{\n  json: {\n    slackMessage: slackMessage,\n    rawBriefing: briefing,\n    metadata: {\n      emailCount: consolidatedData.emailCount,\n      eventCount: consolidatedData.eventCount,\n      generatedAt: today.toISOString()\n    }\n  }\n}];"
+      },
+      "id": "6005ab44-7029-4371-be8d-8731c94f9836",
+      "name": "Format Slack Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        912,
+        -16
+      ],
+      "notesInFlow": true,
+      "notes": "Formats the AI briefing into a clean Slack message with proper formatting and metadata"
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "YOUR_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ $json.slackMessage }}",
+        "otherOptions": {
+          "mrkdwn": true
+        }
+      },
+      "id": "b24f13e7-cd3b-4619-8976-1b818d3722a5",
+      "name": "Slack - Send Briefing",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        1136,
+        -16
+      ],
+      "notesInFlow": true,
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "notes": "Sends the formatted briefing to your Slack channel or DM. Replace YOUR_CHANNEL_ID with your target channel/DM ID."
+    },
+    {
+      "parameters": {
+        "content": "## \ud83c\udf05 Daily Executive Briefing\n\n### What This Workflow Does:\n1. Runs daily at 8:00 AM (or manually)\n2. Fetches your unread Gmail emails\n3. Gets today's Google Calendar events\n4. AI summarizes everything into a scannable briefing\n5. Sends the digest to Slack\n\n### Setup Required:\n- **Gmail**: Log in with your Google account\n- **Google Calendar**: OAuth2 credentials from Google Cloud Console\n- **OpenAI API**: API key from platform.openai.com\n- **Slack**: OAuth app with chat:write scope\n\n### How to Use:\n1. Configure all 4 credentials\n2. Set your Slack channel ID in the last node\n3. Test with Manual Trigger first\n4. Enable Schedule Trigger for daily automation\n\n### Timezone Note:\nThe schedule runs at 8:00 AM server time. Adjust the cron expression if needed.",
+        "height": 648,
+        "width": 400
+      },
+      "id": "bea2c29e-8e49-4994-a3e3-2c89a96f45b6",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -336,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## \u2699\ufe0f Credential Setup Quick Reference\n\n### Gmail:\n- After clicking 'Add Credential' in the Gmail node, log in with your Google account.\n\n### Google Calendar:\n- Create OAuth2 credentials in Google Cloud Console\n- Enable Google Calendar API\n- Add redirect URI from n8n\n\n### OpenAI:\n- Get API key from platform.openai.com\n- Model used: gpt-4o-mini (~$0.01/run)\n\n### Slack:\n- Create app at api.slack.com\n- Add `chat:write` scope\n- Install to workspace\n- Get channel ID from Slack URL",
+        "height": 576,
+        "width": 380
+      },
+      "id": "a927a8c4-3143-498e-9c26-a343fa83dcc3",
+      "name": "Sticky Note - Credentials",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        112,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 10,
+        "simple": false,
+        "filters": {
+          "readStatus": "unread"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        -112,
+        -112
+      ],
+      "id": "2845973d-007b-41bd-b9c9-373ef74904ec",
+      "name": "Gmail - Fetch Unread Emails",
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Fetches unread emails from your Gmail inbox. Connect your Gmail IMAP credentials here. Enable IMAP in Gmail settings first."
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        112,
+        -16
+      ],
+      "id": "07a1cb7e-5230-4d1a-8b8a-f5ef808e9ca9",
+      "name": "Merge Email and Calendar Data",
+      "notesInFlow": true,
+      "notes": "Combines email and calendar data into a single payload for processing"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert executive assistant. Your task is to create a concise, scannable daily briefing for a busy professional.\n\nYou will receive data about unread emails and today's calendar events. Your job is to:\n1. Summarize the most important/urgent emails (prioritize by sender importance and subject urgency)\n2. List today's schedule in chronological order with key details\n3. Highlight any conflicts or important prep needed\n4. Keep the tone professional but friendly\n\nFormat your response as a clean, readable briefing that can be quickly scanned on a phone. Use emojis sparingly for visual scanning (\ud83d\udce7 for emails, \ud83d\udcc5 for calendar, \u26a0\ufe0f for urgent items).\n\nKeep the entire briefing under 500 words."
+            },
+            {
+              "content": "=Create my daily executive briefing for today.\n\nUnread Emails ({{ $json.emailCount }} total):\n{{ JSON.stringify($json.emails, null, 2) }}\n\nToday's Calendar ({{ $json.eventCount }} events):\n{{ JSON.stringify($json.calendarEvents, null, 2) }}\n\nRemember:\n- Prioritize urgent/important items first\n- Keep it scannable and concise\n- Highlight anything that needs immediate attention\n- Include meeting prep suggestions if relevant"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        560,
+        -16
+      ],
+      "id": "ce0b5e92-6b5f-4a92-8d51-71cbb5ac347f",
+      "name": "OpenAI - Generate Briefing",
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Uses GPT-4o-mini to create a concise, scannable executive briefing. Connect your OpenAI API credentials here."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar - Get Today's Events",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gmail - Fetch Unread Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar - Get Today's Events",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Gmail - Fetch Unread Emails",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar - Get Today's Events": {
+      "main": [
+        [
+          {
+            "node": "Merge Email and Calendar Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Consolidate Data": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Generate Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Slack Message": {
+      "main": [
+        [
+          {
+            "node": "Slack - Send Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Fetch Unread Emails": {
+      "main": [
+        [
+          {
+            "node": "Merge Email and Calendar Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Email and Calendar Data": {
+      "main": [
+        [
+          {
+            "node": "Consolidate Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Generate Briefing": {
+      "main": [
+        [
+          {
+            "node": "Format Slack Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

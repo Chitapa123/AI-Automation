@@ -1,0 +1,372 @@
+{
+  "name": "Weekly Industry News Curator",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "weekly-news-curator-form",
+        "formTitle": "Weekly Industry News Curator",
+        "formDescription": "Enter your industry/niche to generate a curated newsletter draft with AI-powered summaries.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Industry/Niche",
+              "placeholder": "e.g., Real Estate, SaaS, Healthcare, FinTech",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Keywords (Optional)",
+              "placeholder": "e.g., market trends, AI, investment"
+            },
+            {
+              "fieldLabel": "Number of Stories",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "3"
+                  },
+                  {
+                    "option": "5"
+                  },
+                  {
+                    "option": "7"
+                  }
+                ]
+              },
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Newsletter Tone",
+              "fieldType": "dropdown",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Professional"
+                  },
+                  {
+                    "option": "Casual & Friendly"
+                  },
+                  {
+                    "option": "Executive Brief"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8a0aefaf-41a2-44e1-b586-9efb0c825bfb",
+      "name": "Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.1,
+      "position": [
+        -800,
+        -432
+      ],
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "notesInFlow": true,
+      "notes": "User submits their industry/niche and preferences. Click 'Test Step' to open the form and submit test data."
+    },
+    {
+      "parameters": {
+        "url": "https://newsapi.org/v2/everything",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json['Industry/Niche'] }} {{ $json['Keywords (Optional)'] || '' }}"
+            },
+            {
+              "name": "sortBy",
+              "value": "publishedAt"
+            },
+            {
+              "name": "language",
+              "value": "en"
+            },
+            {
+              "name": "pageSize",
+              "value": "={{ $json['Number of Stories'] }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3e8afbe0-d3ac-46c4-a3bd-4382485e6a36",
+      "name": "NewsAPI - Fetch Articles",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -576,
+        -432
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Fetches latest news articles from NewsAPI.org. Requires HTTP Query Auth credential with 'apiKey' as the name and your NewsAPI key as the value."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and clean NewsAPI results into structured format\nconst inputData = $input.first().json;\nconst formData = $('Form Trigger').first().json;\n\ntry {\n  // Extract articles from NewsAPI response\n  const articles = inputData.articles || [];\n  \n  if (articles.length === 0) {\n    return [{\n      json: {\n        error: true,\n        message: 'No articles found for this industry/niche. Try different keywords.',\n        industry: formData['Industry/Niche']\n      }\n    }];\n  }\n  \n  // Format articles for summarization\n  const formattedArticles = articles.map((article, index) => ({\n    position: index + 1,\n    title: article.title || 'No title',\n    source: article.source?.name || 'Unknown source',\n    description: article.description || '',\n    content: article.content || article.description || '',\n    url: article.url || '',\n    publishedAt: article.publishedAt || '',\n    author: article.author || 'Unknown'\n  }));\n  \n  return [{\n    json: {\n      industry: formData['Industry/Niche'],\n      keywords: formData['Keywords (Optional)'] || '',\n      tone: formData['Newsletter Tone'],\n      totalArticles: formattedArticles.length,\n      articles: formattedArticles,\n      articlesText: formattedArticles.map(a => \n        `Article ${a.position}: ${a.title}\\nSource: ${a.source}\\nContent: ${a.content}\\nURL: ${a.url}`\n      ).join('\\n\\n---\\n\\n')\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to parse news results: ' + error.message,\n      rawResponse: inputData\n    }\n  }];\n}"
+      },
+      "id": "94bfef44-e45c-4158-9be9-3be1c179c983",
+      "name": "Parse News Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -352,
+        -432
+      ],
+      "notesInFlow": true,
+      "notes": "Cleans and structures the raw NewsAPI response. Extracts title, source, content, and URL for each article."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse OpenAI summaries response\nconst inputData = $input.first().json.output[0].content[0].text;\nconst previousData = $('Parse News Results').first().json;\n\ntry {\n  // Parse the message content (it's a JSON string)\n  let summariesData;\n  \n  if (typeof inputData.message?.content === 'string') {\n    summariesData = JSON.parse(inputData.message.content);\n  } else if (inputData.message?.content) {\n    summariesData = inputData.message.content;\n  } else {\n    throw new Error('No content in OpenAI response');\n  }\n  \n  return [{\n    json: {\n      industry: previousData.industry,\n      tone: previousData.tone,\n      summaries: summariesData.summaries || [],\n      summariesText: (summariesData.summaries || []).map(s => \n        `## ${s.hook}\\n\\n${s.summary}\\n\\n**Why it matters:** ${s.whyItMatters}\\n\\n\ud83d\udd17 Source: ${s.source} - ${s.url}`\n      ).join('\\n\\n---\\n\\n')\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to parse summaries: ' + error.message,\n      rawResponse: inputData\n    }\n  }];\n}"
+      },
+      "id": "a354e7e6-97e1-4791-ac1f-eff78b6f0734",
+      "name": "Parse Summaries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        -432
+      ],
+      "notesInFlow": true,
+      "notes": "Extracts and formats the AI-generated summaries into readable newsletter sections."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Compile final newsletter content for Google Doc\nconst inputData = $input.first().json;\nconst summariesData = $('Parse Summaries').first().json;\n\ntry {\n  // Parse intro content\n  let introData;\n  \n  if (typeof inputData.message?.content === 'string') {\n    introData = JSON.parse(inputData.message.content);\n  } else if (inputData.message?.content) {\n    introData = inputData.message.content;\n  } else {\n    throw new Error('No content in OpenAI response');\n  }\n  \n  // Get current date for the newsletter\n  const today = new Date();\n  const dateString = today.toLocaleDateString('en-US', { \n    weekday: 'long', \n    year: 'numeric', \n    month: 'long', \n    day: 'numeric' \n  });\n  \n  // Compile the full newsletter\n  const newsletterContent = `# ${summariesData.industry} Weekly News Digest\n\n**Date:** ${dateString}\n\n**Subject Line:** ${introData.subjectLine}\n\n---\n\n## \ud83d\udc4b Hello!\n\n${introData.greeting}\n\n${introData.preview}\n\n---\n\n# \ud83d\udcf0 This Week's Top Stories\n\n${summariesData.summariesText}\n\n---\n\n## \ud83d\udcec That's a Wrap!\n\nThanks for reading this week's ${summariesData.industry} digest. Hit reply if you have any thoughts or tips for next week's edition!\n\nUntil next time,\n[Your Name]\n\n---\n*This newsletter was curated with AI assistance.*`;\n  \n  return [{\n    json: {\n      documentTitle: `${summariesData.industry} Weekly News - ${dateString}`,\n      subjectLine: introData.subjectLine,\n      content: newsletterContent,\n      industry: summariesData.industry\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to compile newsletter: ' + error.message,\n      rawResponse: inputData\n    }\n  }];\n}"
+      },
+      "id": "670914b8-99bd-4a27-a452-1ee2697d4df9",
+      "name": "Compile Newsletter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        800,
+        -432
+      ],
+      "notesInFlow": true,
+      "notes": "Assembles the final newsletter with intro, stories, and closing. Formats everything for Google Docs."
+    },
+    {
+      "parameters": {
+        "folderId": "1JeXy1kiLCovsYkYo9JYWFt1wA_3YgmFH",
+        "title": "={{ $json.documentTitle }}"
+      },
+      "id": "a33f4599-5ce2-4188-9458-3feda08c01c3",
+      "name": "Create Google Doc",
+      "type": "n8n-nodes-base.googleDocs",
+      "typeVersion": 2,
+      "position": [
+        1024,
+        -432
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Creates a new Google Doc with the complete newsletter draft. Requires Google Docs OAuth2 credential."
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udcf0 Weekly Industry News Curator\n\n### What This Workflow Does:\n1. User submits industry/niche via form\n2. Fetches latest news from NewsAPI\n3. AI summarizes each article with hooks\n4. AI writes newsletter intro & subject line\n5. Creates Google Doc with complete draft\n\n### Setup Required:\n- **NewsAPI**: Free API key from newsapi.org (HTTP Query Auth: name='apiKey')\n- **OpenAI API**: Your OpenAI API key\n- **Google Docs**: OAuth2 connection to your Google account\n\n### How to Use:\n1. Click 'Test Workflow' or activate it\n2. Open the form URL and submit your niche\n3. Check your Google Drive for the new doc\n4. Review, edit, and send via your email platform!",
+        "height": 560,
+        "width": 400,
+        "color": 4
+      },
+      "id": "4f734da7-b74e-427d-a41f-bf96828f8d8b",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -800,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udca1 Pro Tips\n\n### Best Niches to Try:\n- Real Estate\n- SaaS & Tech Startups\n- Healthcare & MedTech\n- FinTech & Crypto\n- E-commerce & DTC\n- Sustainability & CleanTech\n\n### Customization Ideas:\n- Change GPT model to gpt-4o for better quality\n- Add a 'Sign up' link at the end\n- Include your logo/branding in the doc\n- Add a 'Featured Sponsor' section\n\n### Estimated Cost Per Run:\n- NewsAPI: Free (up to 100 requests/day)\n- OpenAI: ~$0.01-0.03 (gpt-4o-mini)\n- Google Docs: Free",
+        "height": 532,
+        "width": 320,
+        "color": 6
+      },
+      "id": "900af91f-6edc-494e-ac8a-a49f7fc707b9",
+      "name": "Sticky Note - Tips",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert newsletter curator and content summarizer. Your task is to create concise, engaging summaries of news articles for a professional newsletter.\n\nYou will receive multiple news articles. For each article, create:\n1. A catchy one-line hook (max 15 words)\n2. A 2-3 sentence summary of the key points\n3. Why this matters to the reader (1 sentence)\n\nOutput format must be valid JSON with this structure:\n{\n  \"summaries\": [\n    {\n      \"position\": 1,\n      \"hook\": \"Catchy one-liner\",\n      \"summary\": \"2-3 sentence summary\",\n      \"whyItMatters\": \"Why readers should care\",\n      \"source\": \"Source name\",\n      \"url\": \"Article URL\"\n    }\n  ]\n}"
+            },
+            {
+              "content": "=Summarize these {{ $json.industry }} news articles:\n\n{{ $json.articlesText }}\n\nRemember:\n- Keep summaries punchy and scannable\n- Focus on actionable insights\n- Tone should match: {{ $json.tone }}\n- Output ONLY valid JSON, no markdown code blocks"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_object"
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        -128,
+        -432
+      ],
+      "id": "7de8ef35-4ea1-43dd-8185-dcb85c4331e7",
+      "name": "OpenAI - Summarize Stories",
+      "credentials": {}
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert newsletter writer. Your task is to write an engaging introduction for a weekly industry newsletter.\n\nYou will receive the industry/niche and article summaries. Write:\n1. A compelling subject line (max 60 characters)\n2. A greeting/hook paragraph (2-3 sentences)\n3. A brief preview of what's inside (1-2 sentences)\n\nOutput format must be valid JSON with this structure:\n{\n  \"subjectLine\": \"Email subject line\",\n  \"greeting\": \"Opening paragraph\",\n  \"preview\": \"What's in this issue\"\n}"
+            },
+            {
+              "content": "=Write a newsletter intro for the {{ $json.industry }} industry.\n\nTone: {{ $json.tone }}\n\nStories covered this week:\n{{ $json.summariesText }}\n\nRemember:\n- Make the subject line irresistible to open\n- The greeting should feel personal and timely\n- Reference current trends or the week's theme\n- Output ONLY valid JSON, no markdown code blocks"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_object"
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        448,
+        -432
+      ],
+      "id": "8cc978bf-358c-4bc1-85cf-53bedb2baf8f",
+      "name": "OpenAI - Generate Newsletter Intro",
+      "credentials": {}
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "NewsAPI - Fetch Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NewsAPI - Fetch Articles": {
+      "main": [
+        [
+          {
+            "node": "Parse News Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse News Results": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Summarize Stories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Summaries": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Generate Newsletter Intro",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Newsletter": {
+      "main": [
+        [
+          {
+            "node": "Create Google Doc",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Summarize Stories": {
+      "main": [
+        [
+          {
+            "node": "Parse Summaries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Generate Newsletter Intro": {
+      "main": [
+        [
+          {
+            "node": "Compile Newsletter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

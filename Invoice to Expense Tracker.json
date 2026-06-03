@@ -1,0 +1,366 @@
+{
+  "name": "Invoice to Expense Tracker",
+  "nodes": [
+    {
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            {
+              "mode": "everyMinute"
+            }
+          ]
+        },
+        "filters": {}
+      },
+      "id": "35d9e20e-d5e7-4d43-b85d-faf91afd7804",
+      "name": "Gmail Trigger",
+      "type": "n8n-nodes-base.gmailTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        736,
+        288
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Watches Gmail every minute for new emails with PDF attachments containing 'invoice' in the filename. Downloads attachments automatically."
+    },
+    {
+      "parameters": {
+        "operation": "pdf",
+        "binaryPropertyName": "attachment_0",
+        "options": {}
+      },
+      "id": "b1fff45d-96ce-4223-93d5-c7ff1bc7a6ca",
+      "name": "Extract PDF Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        1184,
+        288
+      ],
+      "notesInFlow": true,
+      "notes": "Extracts raw text content from the PDF invoice attachment. Works with text-based PDFs (not scanned images)."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "messages": {
+          "values": [
+            {
+              "content": "You are an expert invoice parser. Your task is to extract key financial data from invoice text.\n\nYou will receive raw text extracted from a PDF invoice. Your job is to:\n1. Identify the invoice date\n2. Extract the total amount (final amount due)\n3. Identify the vendor/company name\n4. Write a brief description of what was purchased\n5. Extract the invoice number if present\n6. Identify the currency\n\nOutput format must be valid JSON with this structure:\n{\n  \"date\": \"YYYY-MM-DD\",\n  \"amount\": 123.45,\n  \"currency\": \"USD\",\n  \"vendor\": \"Company Name\",\n  \"description\": \"Brief description of purchase\",\n  \"invoice_number\": \"INV-12345\",\n  \"confidence\": \"high/medium/low\"\n}\n\nRules:\n- For date, convert to YYYY-MM-DD format regardless of input format\n- For amount, extract only the number (no currency symbols)\n- If a field cannot be found, use null\n- Set confidence based on how clearly the data was found",
+              "role": "system"
+            },
+            {
+              "content": "=Parse this invoice text and extract the financial data:\n{{ $json.text }}\n\nRemember:\n- Extract the TOTAL/FINAL amount, not subtotals\n- Use YYYY-MM-DD date format\n- Output ONLY valid JSON, no markdown code blocks"
+            }
+          ]
+        },
+        "jsonOutput": true,
+        "options": {
+          "temperature": 0.1
+        }
+      },
+      "id": "58233b8a-f524-4b26-9f83-6db9ff26bbfd",
+      "name": "OpenAI - Parse Invoice",
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 1.8,
+      "position": [
+        1408,
+        288
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Sends extracted text to GPT-4o-mini to intelligently parse and structure the invoice data. Uses low temperature for consistent output."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the structured output from OpenAI\nconst aiOutput = $node[\"OpenAI - Parse Invoice\"].json.message.content;\n\n// Get the email data from the Trigger (using the correct method for v2)\nconst emailData = $('Gmail Trigger').first().json;\n\ntry {\n  // Since OpenAI returned a JSON object directly, we don't need to parse it\n  const formattedData = {\n    date: aiOutput.date || 'UNKNOWN',\n    amount: aiOutput.amount || 0,\n    currency: aiOutput.currency || 'USD',\n    vendor: aiOutput.vendor || 'UNKNOWN',\n    description: aiOutput.description || '',\n    invoice_number: aiOutput.invoice_number || '',\n    confidence: aiOutput.confidence || 'low',\n    email_subject: emailData.Subject || 'No Subject', // Gmail Trigger uses capital 'S'\n    email_from: emailData.From || 'Unknown Sender',  // Gmail Trigger uses capital 'F'\n    processed_at: new Date().toISOString(),\n    status: 'auto-processed'\n  };\n\n  return [{ json: formattedData }];\n\n} catch (error) {\n  return [{\n    json: {\n      status: 'needs-review',\n      error_message: error.message,\n      processed_at: new Date().toISOString()\n    }\n  }];\n}"
+      },
+      "id": "460bd21e-4172-4745-99a4-52e868dc8337",
+      "name": "Format Sheet Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        288
+      ],
+      "notesInFlow": true,
+      "notes": "Cleans and formats the AI response for Google Sheets. Handles parsing errors gracefully by flagging items for manual review."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $json.date }}",
+            "Amount": "={{ $json.amount }}",
+            "Currency": "={{ $json.currency }}",
+            "Vendor": "={{ $json.vendor }}",
+            "Description": "={{ $json.description }}",
+            "Invoice Number": "={{ $json.invoice_number }}",
+            "Confidence": "={{ $json.confidence }}",
+            "Email Subject": "={{ $json.email_subject }}",
+            "Email From": "={{ $json.email_from }}",
+            "Processed At": "={{ $json.processed_at }}",
+            "Status": "={{ $json.status }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Date",
+              "displayName": "Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Amount",
+              "displayName": "Amount",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Currency",
+              "displayName": "Currency",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Vendor",
+              "displayName": "Vendor",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Description",
+              "displayName": "Description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Invoice Number",
+              "displayName": "Invoice Number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Confidence",
+              "displayName": "Confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email Subject",
+              "displayName": "Email Subject",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Email From",
+              "displayName": "Email From",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Processed At",
+              "displayName": "Processed At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Status",
+              "displayName": "Status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "4b44a0b9-b0bd-4669-9af1-765e6102f5f8",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        1984,
+        288
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Appends the parsed invoice data as a new row in your Finance tracking spreadsheet. Configure your Sheet ID and Sheet Name below."
+    },
+    {
+      "parameters": {
+        "content": "## \ud83e\uddfe Invoice to Expense Tracker\n\n### What This Workflow Does:\n1. Watches Gmail for emails with PDF invoice attachments\n2. Extracts text from the PDF\n3. Uses AI to parse Date, Amount, Vendor, etc.\n4. Adds a clean row to your Finance Google Sheet\n\n### Setup Required:\n- **Gmail account**: OAuth2 connection\n- **Google Sheets account**: OAuth2 connection\n- **OpenAI API**: API key for GPT-4o-mini\n- **Google Sheet**: Create sheet with columns (see docs)\n\n### How to Use:\n1. Connect your Gmail & Google Sheets credentials\n2. Create a Google Sheet with the required columns\n3. Configure the Sheet ID and Sheet Name in the last node\n4. Activate the workflow\n5. Forward or receive invoice emails - they auto-process!",
+        "height": 560,
+        "width": 400,
+        "color": 5
+      },
+      "id": "02fbc845-adf2-46df-943c-0fd683dde675",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        720,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## \u2699\ufe0f Configuration Notes\n\n### Gmail Trigger:\n- Currently set to check every minute\n- Search filter: `has:attachment filename:pdf invoice`\n- Modify the search string to match your invoice emails\n\n### Google Sheets Columns Required:\n`Date | Amount | Currency | Vendor | Description | Invoice Number | Confidence | Email Subject | Email From | Processed At | Status`\n\n### Tips:\n- Items with `needs-review` status failed to parse\n- Check `confidence` column for uncertain parses\n- Low confidence = verify manually",
+        "height": 476,
+        "width": 380,
+        "color": 6
+      },
+      "id": "8b5f9dc6-0192-462f-959d-f30189ab569f",
+      "name": "Sticky Note - Config",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1168,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "messageId": "={{ $json.id }}",
+        "simple": false,
+        "options": {
+          "downloadAttachments": true
+        }
+      },
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        960,
+        288
+      ],
+      "id": "40ec507e-db2e-4f5f-beb8-523641b52b69",
+      "name": "Get Email",
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "credentials": {}
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Gmail Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract PDF Text": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Parse Invoice",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Parse Invoice": {
+      "main": [
+        [
+          {
+            "node": "Format Sheet Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Sheet Data": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Email": {
+      "main": [
+        [
+          {
+            "node": "Extract PDF Text",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

@@ -1,0 +1,409 @@
+{
+  "name": "Stalled Deal Wake Up",
+  "nodes": [
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "search",
+        "additionalFields": {
+          "properties": [
+            "dealname",
+            "amount",
+            "hubspot_owner_id",
+            "closedate",
+            "hs_lastmodifieddate",
+            "notes_last_updated"
+          ]
+        }
+      },
+      "id": "a044686c-f493-47c9-9679-ade7eacfd001",
+      "name": "HubSpot - Get Deals in Negotiation",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        336,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Fetches all deals in Negotiation stage. Update 'dealstage' value to match your HubSpot pipeline stage ID."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter deals that have been stalled for more than 7 days\nconst deals = $input.all();\nconst sevenDaysAgo = new Date();\nsevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);\n\nconst stalledDeals = [];\n\nfor (const item of deals) {\n  try {\n    const deal = item.json;\n    const lastModified = new Date(deal.properties?.hs_lastmodifieddate || deal.hs_lastmodifieddate);\n    \n    // Check if deal hasn't been touched in 7+ days\n    if (lastModified < sevenDaysAgo) {\n      stalledDeals.push({\n        json: {\n          dealId: deal.id,\n          dealName: deal.properties?.dealname || deal.dealname || 'Unknown Deal',\n          amount: deal.properties?.amount || deal.amount || 'Not specified',\n          ownerId: deal.properties?.hubspot_owner_id || deal.hubspot_owner_id,\n          lastModified: lastModified.toISOString(),\n          daysSinceUpdate: Math.floor((new Date() - lastModified) / (1000 * 60 * 60 * 24)),\n          closeDate: deal.properties?.closedate || deal.closedate\n        }\n      });\n    }\n  } catch (error) {\n    // Skip deals with parsing errors\n    continue;\n  }\n}\n\n// Return stalled deals or empty indicator\nif (stalledDeals.length === 0) {\n  return [{ json: { noStalledDeals: true, message: 'No stalled deals found' } }];\n}\n\nreturn stalledDeals;"
+      },
+      "id": "ebd08b87-ea24-47a4-95b4-fbfda329b4a6",
+      "name": "Filter Stalled Deals (7+ Days)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        560,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Filters deals that haven't been updated in 7+ days. Adjust the day threshold in the code if needed."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "check-stalled-deals",
+              "leftValue": "={{ $json.noStalledDeals }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "notEquals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7cb9de05-98d4-48ac-85be-092bae8f9292",
+      "name": "IF Has Stalled Deals",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        784,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Routes workflow - continues if stalled deals exist, stops if none found."
+    },
+    {
+      "parameters": {
+        "resource": "deal",
+        "operation": "get",
+        "dealId": "={{ $json.dealId }}",
+        "filters": {}
+      },
+      "id": "2f61fe52-1d16-41ff-9883-82f71f7ef310",
+      "name": "HubSpot - Get Deal Details",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        1008,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Fetches full deal details including associated contacts for personalization."
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "contactId": "={{ $json.associations?.contacts?.results[0]?.id || '' }}",
+        "additionalFields": {}
+      },
+      "id": "ca53c4c5-1a61-4c1b-b902-8f01b33e8393",
+      "name": "HubSpot - Get Contact",
+      "type": "n8n-nodes-base.hubspot",
+      "typeVersion": 2,
+      "position": [
+        1232,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Gets contact details for email personalization. Uses first associated contact."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the OpenAI JSON response\nconst inputData = $input.first().json;\nconst contactData = $('HubSpot - Get Contact').first().json;\nconst dealData = $('Filter Stalled Deals (7+ Days)').first().json;\n\ntry {\n  // Parse the message content (may be string or already parsed)\n  let emailContent;\n  const messageContent = inputData.message?.content || inputData.choices?.[0]?.message?.content;\n  \n  if (typeof messageContent === 'string') {\n    emailContent = JSON.parse(messageContent);\n  } else {\n    emailContent = messageContent;\n  }\n  \n  return [{\n    json: {\n      recipientEmail: contactData.properties?.email || '',\n      recipientName: `${contactData.properties?.firstname || ''} ${contactData.properties?.lastname || ''}`.trim(),\n      subject: emailContent.subject,\n      body: emailContent.body,\n      suggestedNextStep: emailContent.suggestedNextStep,\n      dealId: dealData.dealId,\n      dealName: dealData.dealName,\n      dealAmount: dealData.amount,\n      daysSinceUpdate: dealData.daysSinceUpdate,\n      generatedAt: new Date().toISOString()\n    }\n  }];\n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to parse OpenAI response',\n      rawResponse: inputData\n    }\n  }];\n}"
+      },
+      "id": "247bf1cb-9803-4916-89d4-0bd3cfbc193a",
+      "name": "Parse Email Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1808,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Parses OpenAI JSON response and formats data for Gmail draft creation."
+    },
+    {
+      "parameters": {
+        "resource": "draft",
+        "subject": "={{ $json.subject }}",
+        "message": "={{ $json.body }}",
+        "options": {}
+      },
+      "id": "d6a6d9fa-abf0-433e-aabe-14c74f6830cb",
+      "name": "Gmail - Create Draft",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        2032,
+        48
+      ],
+      "notesInFlow": true,
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "credentials": {},
+      "notes": "Creates a draft email in your Gmail. Review and click Send when ready!"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "={{ $env.STALLED_DEALS_SHEET_ID || '1YOUR_SHEET_ID_HERE' }}",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Sheet1",
+          "mode": "list"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.format('yyyy-MM-dd HH:mm') }}",
+            "Deal Name": "={{ $json.dealName }}",
+            "Contact Name": "={{ $json.recipientName }}",
+            "Contact Email": "={{ $json.recipientEmail }}",
+            "Deal Amount": "={{ $json.dealAmount }}",
+            "Days Stalled": "={{ $json.daysSinceUpdate }}",
+            "Email Subject": "={{ $json.subject }}",
+            "Status": "Draft Created",
+            "Suggested Next Step": "={{ $json.suggestedNextStep }}"
+          }
+        },
+        "options": {}
+      },
+      "id": "76ade3e0-ac3e-4182-9221-d83cf52f6047",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        2256,
+        48
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Logs all generated follow-ups for tracking. Create a Google Sheet with matching column headers."
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udd14 Stalled Deal Wake Up\n\n### What This Workflow Does:\n1. Runs every weekday at 9 AM\n2. Finds HubSpot deals stuck in Negotiation for 7+ days\n3. Generates personalized \"checking in\" emails with AI\n4. Creates Gmail drafts for rep approval\n5. Logs all activity to Google Sheets\n\n### Setup Required:\n- **HubSpot API**: Private App with deals.read scope\n- **OpenAI API**: API key with GPT-4o-mini access\n- **Gmail**: OAuth2 connection for draft creation\n- **Google Sheets**: Sheet ID for logging (optional)\n\n### How to Use:\n1. Set up all credentials (see docs)\n2. Update the dealstage value to match YOUR pipeline\n3. Create a Google Sheet with the logging columns\n4. Activate the workflow and let it run!\n\n### Customization:\n- Change schedule in the Schedule Trigger node\n- Adjust 7-day threshold in the Filter code node\n- Modify email tone in OpenAI system prompt",
+        "height": 644,
+        "width": 400,
+        "color": 4
+      },
+      "id": "ae497002-0067-4481-82fc-694ea3b021ad",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        96,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udcca Logging Sheet Setup\n\nCreate a Google Sheet with these columns:\n- Date\n- Deal Name\n- Contact Name\n- Contact Email\n- Deal Amount\n- Days Stalled\n- Email Subject\n- Status\n- Suggested Next Step\n\nThen copy the Sheet ID from the URL and paste it in the Google Sheets node.",
+        "height": 360,
+        "width": 320,
+        "color": 6
+      },
+      "id": "c5345be3-15dd-49ce-a018-5409daf3e001",
+      "name": "Sticky Note - Sheets Setup",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        2000,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## \u26a0\ufe0f No Deals Path\n\nIf no stalled deals are found, the workflow stops here gracefully. No emails are generated, no errors thrown.",
+        "width": 280,
+        "color": 3
+      },
+      "id": "45535e42-4757-431a-ba3b-97e0e7cdd02f",
+      "name": "Sticky Note - No Deals",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        768,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        112,
+        48
+      ],
+      "id": "155f594b-035e-4358-86eb-21b9a57fa1c1",
+      "name": "Schedule Trigger",
+      "notesInFlow": true,
+      "notes": "Runs every weekday at 9:00 AM. Adjust the cron expression to change schedule."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert sales copywriter. Your task is to write warm, professional \"just checking in\" follow-up emails for stalled deals.\n\nYou will receive deal and contact information. Your job is to:\n1. Write a personalized subject line\n2. Create a brief, friendly email body (3-4 sentences max)\n3. Include a soft call-to-action\n4. Keep the tone warm but professional - NOT pushy or salesy\n\nOutput format must be valid JSON with this structure:\n{\n  \"subject\": \"Your personalized subject line here\",\n  \"body\": \"Your email body here with proper line breaks using \\n\",\n  \"suggestedNextStep\": \"Brief internal note for the sales rep\"\n}"
+            },
+            {
+              "content": "=Write a follow-up email for this stalled deal:\n\nContact Name: {{ $('HubSpot - Get Contact').item.json.properties?.firstname || 'there' }} {{ $('HubSpot - Get Contact').item.json.properties?.lastname || '' }}\nContact Email: {{ $('HubSpot - Get Contact').item.json.properties?.email || 'N/A' }}\nCompany: {{ $('HubSpot - Get Contact').item.json.properties?.company || 'their company' }}\nJob Title: {{ $('HubSpot - Get Contact').item.json.properties?.jobtitle || 'N/A' }}\nDeal Name: {{ $('Filter Stalled Deals (7+ Days)').item.json.dealName }}\nDeal Amount: ${{ $('Filter Stalled Deals (7+ Days)').item.json.amount }}\nDays Since Last Update: {{ $('Filter Stalled Deals (7+ Days)').item.json.daysSinceUpdate }}\n\nRemember:\n- Keep it brief and warm (not desperate)\n- Reference the deal naturally without being too specific about the stall\n- Offer to help or answer questions\n- Make it easy for them to respond\n- Output ONLY valid JSON, no markdown code blocks"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_object"
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        1456,
+        48
+      ],
+      "id": "a5ce321e-a52f-4e1e-b012-fd17379831f0",
+      "name": "OpenAI - Generate Follow-up Email",
+      "credentials": {}
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "HubSpot - Get Deals in Negotiation": {
+      "main": [
+        [
+          {
+            "node": "Filter Stalled Deals (7+ Days)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Stalled Deals (7+ Days)": {
+      "main": [
+        [
+          {
+            "node": "IF Has Stalled Deals",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Has Stalled Deals": {
+      "main": [
+        [
+          {
+            "node": "HubSpot - Get Deal Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot - Get Deal Details": {
+      "main": [
+        [
+          {
+            "node": "HubSpot - Get Contact",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Email Content": {
+      "main": [
+        [
+          {
+            "node": "Gmail - Create Draft",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail - Create Draft": {
+      "main": [
+        [
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "HubSpot - Get Deals in Negotiation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HubSpot - Get Contact": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Generate Follow-up Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Generate Follow-up Email": {
+      "main": [
+        [
+          {
+            "node": "Parse Email Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}

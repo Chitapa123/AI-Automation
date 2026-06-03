@@ -1,0 +1,838 @@
+{
+  "name": "Google Review Auto-Responder",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "google-review-responder",
+        "formTitle": "Google Review Auto-Responder",
+        "formDescription": "Monitor and respond to Google Reviews automatically. Enter your business details below.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Google Place ID",
+              "placeholder": "ChIJN1t_tDeuEmsRUsoyG83frY4",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Business Name",
+              "placeholder": "My Awesome Restaurant",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Slack Channel ID",
+              "placeholder": "C01234567",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3b29cb52-a69a-4100-a669-fbd2294cda50",
+      "name": "Form Trigger",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.1,
+      "position": [
+        -1920,
+        240
+      ],
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "notesInFlow": true,
+      "notes": "Start workflow manually by entering your Google Place ID and business details. For production, swap this with a Schedule Trigger to poll automatically."
+    },
+    {
+      "parameters": {
+        "url": "https://serpapi.com/search.json",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpQueryAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "engine",
+              "value": "google_maps_reviews"
+            },
+            {
+              "name": "place_id",
+              "value": "={{ $json['Google Place ID'] }}"
+            },
+            {
+              "name": "sort_by",
+              "value": "newestFirst"
+            },
+            {
+              "name": "hl",
+              "value": "en"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8cd76914-0541-454b-90a7-742875a85365",
+      "name": "SerpAPI - Fetch Reviews",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -1696,
+        240
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Fetches latest Google Maps reviews via SerpAPI. Sorted by newest first. Requires SerpAPI credential with 'api_key' as the query parameter name."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse and format the raw SerpAPI response into clean review objects\nconst inputData = $input.first().json;\nconst businessName = $('Form Trigger').first().json['Business Name'];\nconst placeId = $('Form Trigger').first().json['Google Place ID'];\n\ntry {\n  const reviews = inputData.reviews || [];\n  \n  if (reviews.length === 0) {\n    return [{\n      json: {\n        hasReviews: false,\n        message: 'No reviews found for this business',\n        businessName: businessName,\n        placeId: placeId\n      }\n    }];\n  }\n  \n  // Format each review into a clean structure\n  const formattedReviews = reviews.map(review => ({\n    reviewId: review.review_id || `${review.user?.name}-${review.iso_date}`,\n    rating: review.rating,\n    reviewText: review.snippet || review.text || '',\n    reviewerName: review.user?.name || 'Anonymous',\n    reviewDate: review.iso_date || review.date,\n    relativeDate: review.date,\n    reviewerThumbnail: review.user?.thumbnail || '',\n    reviewLink: review.link || '',\n    responseText: review.response?.snippet || null,\n    hasOwnerResponse: !!review.response,\n    businessName: businessName,\n    placeId: placeId\n  }));\n  \n  return formattedReviews.map(review => ({ json: review }));\n  \n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to parse review data: ' + error.message,\n      rawResponse: inputData\n    }\n  }];\n}"
+      },
+      "id": "3e0287de-1b51-46f9-a6d1-c466735b239b",
+      "name": "Parse Review Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1472,
+        240
+      ],
+      "notesInFlow": true,
+      "notes": "Extracts and formats reviews into clean objects with reviewId, rating, text, and reviewer info. Handles missing fields gracefully."
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "1R9AlnPSdF_dkQhz4sXUrNOpExqICcxDBvKN1B9pmPb4",
+          "mode": "list",
+          "cachedResultName": "gmaps review responder",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1R9AlnPSdF_dkQhz4sXUrNOpExqICcxDBvKN1B9pmPb4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "ProcessedReviews",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1R9AlnPSdF_dkQhz4sXUrNOpExqICcxDBvKN1B9pmPb4/edit#gid=0"
+        },
+        "options": {}
+      },
+      "id": "0f8ea549-2d02-4d64-b7de-a738e7599d80",
+      "name": "Read from Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        -1248,
+        240
+      ],
+      "notesInFlow": true,
+      "alwaysOutputData": true,
+      "credentials": {},
+      "notes": "Reads previously processed review IDs to avoid duplicate responses. Create a sheet with columns: reviewId, rating, responseType, timestamp"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter out reviews that have already been processed\nconst reviews = $('Parse Review Data').all();\nconst processedData = $('Read from Google Sheets').all();\n\ntry {\n  // Get list of already processed review IDs\n  const processedIds = new Set(\n    processedData\n      .map(item => item.json.reviewId)\n      .filter(id => id)\n  );\n  \n  // Filter to only new, unprocessed reviews\n  const newReviews = reviews.filter(review => {\n    // Skip if error in parsing\n    if (review.json.error || review.json.hasReviews === false) {\n      return false;\n    }\n    // Skip if already has owner response\n    if (review.json.hasOwnerResponse) {\n      return false;\n    }\n    // Skip if already processed by us\n    if (processedIds.has(review.json.reviewId)) {\n      return false;\n    }\n    return true;\n  });\n  \n  if (newReviews.length === 0) {\n    return [{\n      json: {\n        noNewReviews: true,\n        message: 'No new reviews to process',\n        totalFetched: reviews.length,\n        alreadyProcessed: processedIds.size\n      }\n    }];\n  }\n  \n  return newReviews;\n  \n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to filter reviews: ' + error.message\n    }\n  }];\n}"
+      },
+      "id": "309ccd41-b350-4ae1-87da-0f5c4641645a",
+      "name": "Filter New Reviews",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1024,
+        240
+      ],
+      "notesInFlow": true,
+      "notes": "Compares fetched reviews against processed log. Filters out: already responded, already processed by workflow, or error records."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "5star",
+              "leftValue": "={{ $json.rating }}",
+              "rightValue": 5,
+              "operator": {
+                "type": "number",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "93f13259-7fd4-4f18-86fd-99d6a81e0bd4",
+      "name": "IF 5-Star Review",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -800,
+        240
+      ],
+      "notesInFlow": true,
+      "notes": "Routes 5-star reviews to the thank-you response path. All other ratings go to the alternative check."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "reviewId",
+              "name": "reviewId",
+              "value": "={{ $('IF 5-Star Review').item.json.reviewId }}",
+              "type": "string"
+            },
+            {
+              "id": "rating",
+              "name": "rating",
+              "value": "={{ $('IF 5-Star Review').item.json.rating }}",
+              "type": "number"
+            },
+            {
+              "id": "reviewerName",
+              "name": "reviewerName",
+              "value": "={{ $('IF 5-Star Review').item.json.reviewerName }}",
+              "type": "string"
+            },
+            {
+              "id": "reviewText",
+              "name": "reviewText",
+              "value": "={{ $('IF 5-Star Review').item.json.reviewText }}",
+              "type": "string"
+            },
+            {
+              "id": "businessName",
+              "name": "businessName",
+              "value": "={{ $('IF 5-Star Review').item.json.businessName }}",
+              "type": "string"
+            },
+            {
+              "id": "generatedResponse",
+              "name": "generatedResponse",
+              "value": "={{ $json.output[0].content[0].text }}",
+              "type": "string"
+            },
+            {
+              "id": "responseType",
+              "name": "responseType",
+              "value": "thank_you",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.format('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8f5a6236-2bdb-41f4-9428-dcadcec60158",
+      "name": "Set 5-Star Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        352,
+        48
+      ],
+      "notesInFlow": true,
+      "notes": "Formats the 5-star review data with generated response for logging to Google Sheets."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "1star",
+              "leftValue": "={{ $json.rating }}",
+              "rightValue": 2,
+              "operator": {
+                "type": "number",
+                "operation": "lte"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "67b44f9f-39dc-458a-8956-a88ff02deae0",
+      "name": "IF Low Rating (1-2 Star)",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -576,
+        336
+      ],
+      "notesInFlow": true,
+      "notes": "Routes 1-2 star reviews to the apology draft + Slack alert path. 3-4 star reviews skip to logging only."
+    },
+    {
+      "parameters": {
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $('Form Trigger').first().json['Slack Channel ID'] }}"
+        },
+        "text": "=\ud83d\udea8 *Negative Review Alert!*\n\n*Business:* {{ $('IF Low Rating (1-2 Star)').item.json.businessName }}\n*Rating:* {{ $('IF Low Rating (1-2 Star)').item.json.rating }} \u2b50\n*Reviewer:* {{ $('IF Low Rating (1-2 Star)').item.json.reviewerName }}\n*Review:* {{ $('IF Low Rating (1-2 Star)').item.json.reviewText }}\n\n---\n\n\u270d\ufe0f *Suggested Response:*\n{{ $json.output[0].content[0].text }}\n\n_Please review and post this response on Google, or modify as needed._",
+        "otherOptions": {
+          "includeLinkToWorkflow": false
+        }
+      },
+      "id": "6881cff8-0b89-4dea-9e7e-b49e87a35143",
+      "name": "Slack - Alert Owner",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        64,
+        240
+      ],
+      "notesInFlow": true,
+      "webhookId": "WEBHOOK_ID_PLACEHOLDER",
+      "disabled": true,
+      "notes": "Sends alert to specified Slack channel with the negative review details and AI-drafted response for owner to review before posting."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "reviewId",
+              "name": "reviewId",
+              "value": "={{ $('IF Low Rating (1-2 Star)').item.json.reviewId }}",
+              "type": "string"
+            },
+            {
+              "id": "rating",
+              "name": "rating",
+              "value": "={{ $('IF Low Rating (1-2 Star)').item.json.rating }}",
+              "type": "number"
+            },
+            {
+              "id": "reviewerName",
+              "name": "reviewerName",
+              "value": "={{ $('IF Low Rating (1-2 Star)').item.json.reviewerName }}",
+              "type": "string"
+            },
+            {
+              "id": "reviewText",
+              "name": "reviewText",
+              "value": "={{ $('IF Low Rating (1-2 Star)').item.json.reviewText }}",
+              "type": "string"
+            },
+            {
+              "id": "businessName",
+              "name": "businessName",
+              "value": "={{ $('IF Low Rating (1-2 Star)').item.json.businessName }}",
+              "type": "string"
+            },
+            {
+              "id": "generatedResponse",
+              "name": "generatedResponse",
+              "value": "={{ $('OpenAI - Draft Apology').item.json.output[0].content[0].text }}",
+              "type": "string"
+            },
+            {
+              "id": "responseType",
+              "name": "responseType",
+              "value": "apology_draft",
+              "type": "string"
+            },
+            {
+              "id": "slackAlertSent",
+              "name": "slackAlertSent",
+              "value": true,
+              "type": "boolean"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.format('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d81d525e-794e-4207-85ad-0933ad766095",
+      "name": "Set Low Rating Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        352,
+        240
+      ],
+      "notesInFlow": true,
+      "notes": "Formats the low-rating review data with generated apology draft for logging. Marks that Slack alert was sent."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "reviewId",
+              "name": "reviewId",
+              "value": "={{ $json.reviewId }}",
+              "type": "string"
+            },
+            {
+              "id": "rating",
+              "name": "rating",
+              "value": "={{ $json.rating }}",
+              "type": "number"
+            },
+            {
+              "id": "reviewerName",
+              "name": "reviewerName",
+              "value": "={{ $json.reviewerName }}",
+              "type": "string"
+            },
+            {
+              "id": "reviewText",
+              "name": "reviewText",
+              "value": "={{ $json.reviewText }}",
+              "type": "string"
+            },
+            {
+              "id": "businessName",
+              "name": "businessName",
+              "value": "={{ $json.businessName }}",
+              "type": "string"
+            },
+            {
+              "id": "generatedResponse",
+              "name": "generatedResponse",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "responseType",
+              "name": "responseType",
+              "value": "logged_only",
+              "type": "string"
+            },
+            {
+              "id": "timestamp",
+              "name": "timestamp",
+              "value": "={{ $now.format('yyyy-MM-dd') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "17495304-a306-43ad-975b-1b8770d51ff3",
+      "name": "Set Mid Rating Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        352,
+        432
+      ],
+      "notesInFlow": true,
+      "notes": "Formats 3-4 star reviews for logging only. No auto-response generated for neutral reviews."
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1R9AlnPSdF_dkQhz4sXUrNOpExqICcxDBvKN1B9pmPb4",
+          "mode": "list",
+          "cachedResultName": "gmaps review responder",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1R9AlnPSdF_dkQhz4sXUrNOpExqICcxDBvKN1B9pmPb4/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "ProcessedReviews",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1R9AlnPSdF_dkQhz4sXUrNOpExqICcxDBvKN1B9pmPb4/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "reviewId": "={{ $json.reviewId }}",
+            "rating": "={{ $json.rating }}",
+            "reviewerName": "={{ $json.reviewerName }}",
+            "reviewText": "={{ $json.reviewText }}",
+            "businessName": "={{ $json.businessName }}",
+            "generatedResponse": "={{ $json.generatedResponse }}",
+            "responseType": "={{ $json.responseType }}",
+            "timestamp": "={{ $json.timestamp }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "reviewId",
+              "displayName": "reviewId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "rating",
+              "displayName": "rating",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reviewerName",
+              "displayName": "reviewerName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "reviewText",
+              "displayName": "reviewText",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "businessName",
+              "displayName": "businessName",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "generatedResponse",
+              "displayName": "generatedResponse",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "responseType",
+              "displayName": "responseType",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "timestamp",
+              "displayName": "timestamp",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "84f4b89f-7e27-49e8-acf8-702f8a87ade6",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.4,
+      "position": [
+        576,
+        240
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Logs all processed reviews to Google Sheets for tracking and deduplication. Includes review details, generated response, and response type."
+    },
+    {
+      "parameters": {
+        "content": "## \ud83c\udf1f Google Review Auto-Responder\n\n### What This Workflow Does:\n1. Fetches latest Google Maps reviews via SerpAPI\n2. Filters out already processed reviews\n3. Routes by rating: 5\u2b50 \u2192 Thank You | 1-2\u2b50 \u2192 Apology + Slack Alert\n4. AI generates personalized responses\n5. Logs everything to Google Sheets\n\n### Setup Required:\n- **SerpAPI**: HTTP Query Auth credential (api_key)\n- **OpenAI API**: Your OpenAI API key\n- **Google Sheets**: OAuth2 connection + create tracking sheet\n- **Slack API**: Bot token with chat:write scope\n\n### How to Use:\n1. Fill in the form with your Google Place ID\n2. Enter your business name and Slack channel ID\n3. Run workflow to process reviews\n4. For automation: Replace Form Trigger with Schedule Trigger\n\n### Google Sheets Columns:\nreviewId | rating | reviewerName | reviewText | businessName | generatedResponse | responseType | timestamp",
+        "height": 712,
+        "width": 420,
+        "color": 5
+      },
+      "id": "e2983fca-2378-45c2-9f53-fa74d206aba4",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1920,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## \ud83d\udcdd Note: Auto-Posting Responses\n\nThis workflow DRAFTS responses but does NOT auto-post them to Google.\n\n**Why?**\nGoogle Business Profile API requires OAuth setup and business verification. Most users prefer to review AI responses before posting.\n\n**To enable auto-posting:**\n1. Set up Google Business Profile API\n2. Add HTTP Request node after OpenAI nodes\n3. POST to the reviews reply endpoint\n\nSee docs for details.",
+        "height": 412,
+        "width": 340,
+        "color": 6
+      },
+      "id": "475dd6a5-c06e-4f67-9e68-9856695097d0",
+      "name": "Sticky Note - Auto Post Info",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1456,
+        496
+      ]
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a professional business owner drafting a response to a negative Google review. Your task is to write a polite, empathetic apology that addresses their concerns.\n\nGuidelines:\n1. Start with a sincere apology\n2. Acknowledge their specific complaint if mentioned\n3. Offer to make things right (without being defensive)\n4. Invite them to contact you directly to resolve the issue\n5. Keep it professional and concise (3-5 sentences)\n6. Sign off with the business name\n\nOutput ONLY the response text, no quotes or formatting."
+            },
+            {
+              "content": "=Draft a professional apology for this negative review:\n\nBusiness: {{ $json.businessName }}\nRating: {{ $json.rating }} stars\nReviewer: {{ $json.reviewerName }}\nReview: {{ $json.reviewText }}\n\nRemember:\n- Be empathetic, not defensive\n- Address their specific concerns\n- Offer resolution\n- Keep it professional (3-5 sentences)\n- Output ONLY the response text"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        -352,
+        240
+      ],
+      "id": "431537ec-ef3d-4f24-b410-2ae82b40e750",
+      "name": "OpenAI - Draft Apology",
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Generates empathetic apology draft for negative reviews. Lower temperature (0.5) for more consistent, professional tone."
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are a friendly business owner responding to positive Google reviews. Your task is to write warm, genuine thank-you responses.\n\nGuidelines:\n1. Keep responses between 2-4 sentences\n2. Reference something specific from their review if possible\n3. Be grateful but not overly effusive\n4. Include a subtle invitation to return\n5. Sign off with the business name\n\nOutput ONLY the response text, no quotes or formatting."
+            },
+            {
+              "content": "=Write a thank-you response for this 5-star review:\n\nBusiness: {{ $json.businessName }}\nReviewer: {{ $json.reviewerName }}\nReview: {{ $json.reviewText }}\n\nRemember:\n- Be genuine and warm\n- Reference their specific experience if mentioned\n- Keep it concise (2-4 sentences)\n- Output ONLY the response text"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "temperature": 1
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        48
+      ],
+      "id": "5d1f6e84-bfe5-4fa0-91d7-8f31904d9768",
+      "name": "OpenAI - Generate Thank You",
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Generates personalized thank-you response for 5-star reviews. Uses GPT-4o-mini for cost efficiency. Adjust temperature for creativity."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Form Trigger": {
+      "main": [
+        [
+          {
+            "node": "SerpAPI - Fetch Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "SerpAPI - Fetch Reviews": {
+      "main": [
+        [
+          {
+            "node": "Parse Review Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Review Data": {
+      "main": [
+        [
+          {
+            "node": "Read from Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read from Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Filter New Reviews",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter New Reviews": {
+      "main": [
+        [
+          {
+            "node": "IF 5-Star Review",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF 5-Star Review": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Generate Thank You",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "IF Low Rating (1-2 Star)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set 5-Star Output": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Low Rating (1-2 Star)": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Draft Apology",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Mid Rating Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack - Alert Owner": {
+      "main": [
+        [
+          {
+            "node": "Set Low Rating Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Low Rating Output": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Mid Rating Output": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Draft Apology": {
+      "main": [
+        [
+          {
+            "node": "Slack - Alert Owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Generate Thank You": {
+      "main": [
+        [
+          {
+            "node": "Set 5-Star Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "meta": {},
+  "tags": []
+}

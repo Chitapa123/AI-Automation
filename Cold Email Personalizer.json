@@ -1,0 +1,556 @@
+{
+  "name": "Cold Email Personalizer",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## \ud83c\udfaf Cold Email Personalizer\n\n### What This Workflow Does:\n1. Reads company About page URLs from Google Sheets\n2. Scrapes each page using Firecrawl API\n3. Generates hyper-personalized icebreaker sentences with OpenAI\n4. Saves icebreakers back to the same Google Sheet\n\n### Setup Required:\n- **Firecrawl API**: Get key at firecrawl.dev\n- **OpenAI API**: Your OpenAI API key\n- **Google Sheets**: OAuth connection\n\n### How to Use:\n1. Add company About page URLs to Column A\n2. Add company names to Column B (optional but recommended)\n3. Click 'Test Workflow' or set up a schedule\n4. Icebreakers appear in Column C",
+        "height": 528,
+        "width": 400
+      },
+      "id": "229fa4af-67af-43d6-a192-463aaff5c7c1",
+      "name": "Sticky Note",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        320
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "2366f487-2a6c-4170-9e50-d0766d972c15",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1104,
+        112
+      ],
+      "notesInFlow": true,
+      "notes": "Click 'Test Workflow' to run manually, or replace with Schedule Trigger for automated runs"
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Cold email responder",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": ""
+        },
+        "options": {}
+      },
+      "id": "3d0d2c5f-6039-4483-a276-b2d9fefac0af",
+      "name": "Read from Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        -880,
+        112
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Reads rows where 'icebreaker' column is empty. Set your Sheet ID and Sheet Name in the node config."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.firecrawl.dev/v2/scrape",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer YOUR_FIRECRAWL_API_KEY"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"url\": \"{{ $json.about_url }}\",\n  \"formats\": [\"markdown\"],\n  \"onlyMainContent\": true\n}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "c2391d94-e8b7-460a-9a52-22ed370cbfb8",
+      "name": "Firecrawl - Scrape About Page",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -656,
+        112
+      ],
+      "notesInFlow": true,
+      "notes": "Scrapes the About page and returns clean markdown. Requires Firecrawl API key as HTTP Header Auth (Bearer token)."
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract and clean the scraped content from Firecrawl response\nconst inputData = $input.first().json;\nconst sheetsData = $('Read from Google Sheets').first().json;\n\ntry {\n  // Get the markdown content from Firecrawl response\n  let scrapedContent = inputData.data?.markdown || inputData.data?.content || '';\n  \n  // === CLEANING PIPELINE ===\n  \n  // 1. Remove all markdown images ![alt](url)\n  scrapedContent = scrapedContent.replace(/!\\[.*?\\]\\(.*?\\)/g, '');\n  \n  // 2. Remove standalone image URLs\n  scrapedContent = scrapedContent.replace(/https?:\\/\\/[^\\s]+\\.(png|jpg|jpeg|gif|webp|svg)[^\\s]*/gi, '');\n  \n  // 3. Remove YouTube embed garbage\n  scrapedContent = scrapedContent.replace(/Watch later Share Copy link.*?(?=\\n\\n|\\n#|$)/gs, '');\n  scrapedContent = scrapedContent.replace(/You're signed out.*?(?=\\n\\n|\\n#|$)/gs, '');\n  scrapedContent = scrapedContent.replace(/If playback doesn't begin.*?(?=\\n\\n|\\n#|$)/gs, '');\n  scrapedContent = scrapedContent.replace(/\\d+:\\d+\\s*\\/\\s*\\d+:\\d+/g, ''); // timestamps like 0:00 / 0:58\n  scrapedContent = scrapedContent.replace(/\u2022Live \u2022/g, '');\n  \n  // 4. Remove common navigation/UI text patterns\n  scrapedContent = scrapedContent.replace(/Search Watch later Share/g, '');\n  scrapedContent = scrapedContent.replace(/CancelConfirm/g, '');\n  scrapedContent = scrapedContent.replace(/Tap to unmute/g, '');\n  scrapedContent = scrapedContent.replace(/More videos/gi, '');\n  scrapedContent = scrapedContent.replace(/\\[Watch on\\]\\(.*?\\)/g, '');\n  scrapedContent = scrapedContent.replace(/Play Uh-oh!.*?(?=\\n|$)/g, '');\n  \n  // 5. Remove markdown links but keep the text: [text](url) -> text\n  scrapedContent = scrapedContent.replace(/\\[([^\\]]+)\\]\\([^)]+\\)/g, '$1');\n  \n  // 6. Remove any remaining URLs\n  scrapedContent = scrapedContent.replace(/https?:\\/\\/[^\\s)]+/g, '');\n  \n  // 7. Clean up excessive whitespace and newlines\n  scrapedContent = scrapedContent.replace(/\\n{3,}/g, '\\n\\n');\n  scrapedContent = scrapedContent.replace(/[ \\t]{2,}/g, ' ');\n  scrapedContent = scrapedContent.replace(/^\\s+|\\s+$/gm, ''); // trim each line\n  \n  // 8. Remove empty headers (# followed by nothing meaningful)\n  scrapedContent = scrapedContent.replace(/^#+\\s*$/gm, '');\n  \n  // Final trim\n  const cleanedContent = scrapedContent.trim();\n  \n  // Truncate if still too long (8000 chars is plenty for GPT-4o-mini context)\n  const maxLength = 10000;\n  const finalContent = cleanedContent.length > maxLength \n    ? cleanedContent.substring(0, maxLength) + '\\n\\n[Content truncated for length]'\n    : cleanedContent;\n  \n  return [{\n    json: {\n      about_url: sheetsData.about_url,\n      company_name: sheetsData.company_name || 'Unknown Company',\n      row_number: sheetsData.row_number,\n      scraped_content: finalContent,\n      content_length: finalContent.length,\n      scrape_success: finalContent.length > 100\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      error: true,\n      message: 'Failed to parse Firecrawl response: ' + error.message,\n      about_url: sheetsData.about_url,\n      company_name: sheetsData.company_name || 'Unknown Company',\n      row_number: sheetsData.row_number,\n      rawResponse: inputData\n    }\n  }];\n}"
+      },
+      "id": "20900936-bf50-400c-b878-e6c72174f69b",
+      "name": "Parse Scraped Content",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        112
+      ],
+      "notesInFlow": true,
+      "notes": "Cleans and truncates the scraped content to prepare it for OpenAI processing"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "scrape-success-check",
+              "leftValue": "={{ $json.scrape_success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "47aab6d5-ee99-40d8-8617-938fa6844c8f",
+      "name": "IF Scrape Success",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -224,
+        112
+      ],
+      "notesInFlow": true,
+      "notes": "Only proceed to OpenAI if we got meaningful content from the scrape"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse the OpenAI response and prepare for Google Sheets update\nconst inputData = $input.first().json;\nconst previousData = $('Parse Scraped Content').first().json;\n\ntry {\n  // Navigate to the actual response content\n  // Structure: output[0].content[0].text contains the JSON object directly\n  const outputContent = inputData.output?.[0]?.content?.[0]?.text;\n  \n  let parsedResponse;\n  \n  if (typeof outputContent === 'object' && outputContent !== null) {\n    // Already parsed as object (n8n JSON response format)\n    parsedResponse = outputContent;\n  } else if (typeof outputContent === 'string') {\n    // String response - need to parse\n    const cleanedContent = outputContent\n      .replace(/```json\\n?/g, '')\n      .replace(/```\\n?/g, '')\n      .trim();\n    parsedResponse = JSON.parse(cleanedContent);\n  } else {\n    // Fallback: try older response formats\n    const messageContent = inputData.message?.content;\n    if (typeof messageContent === 'string') {\n      parsedResponse = JSON.parse(messageContent.replace(/```json\\n?/g, '').replace(/```\\n?/g, '').trim());\n    } else if (typeof messageContent === 'object') {\n      parsedResponse = messageContent;\n    } else {\n      throw new Error('Could not find response in expected locations');\n    }\n  }\n  \n  return [{\n    json: {\n      about_url: previousData.about_url,\n      company_name: previousData.company_name,\n      row_number: previousData.row_number,\n      icebreaker: parsedResponse.icebreaker || 'Failed to generate',\n      hook_type: parsedResponse.hook_type || 'unknown',\n      confidence: parsedResponse.confidence || 'low',\n      status: 'success'\n    }\n  }];\n  \n} catch (error) {\n  return [{\n    json: {\n      about_url: previousData.about_url,\n      company_name: previousData.company_name,\n      row_number: previousData.row_number,\n      icebreaker: 'Error: Could not generate icebreaker',\n      hook_type: 'error',\n      confidence: 'none',\n      status: 'failed',\n      error_message: error.message,\n      debug_input: JSON.stringify(inputData).substring(0, 500)\n    }\n  }];\n}"
+      },
+      "id": "d78d4832-3562-4496-8452-f5db3bce2819",
+      "name": "Parse OpenAI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        352,
+        16
+      ],
+      "notesInFlow": true,
+      "notes": "Parses the OpenAI JSON response and prepares the data for saving back to Google Sheets"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Cold email responder",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "about_url": "={{ $json.about_url }}",
+            "company_name": "={{ $json.company_name }}",
+            "icebreaker": "={{ $json.icebreaker }}",
+            "hook_type": "={{ $json.hook_type }}",
+            "confidence": "={{ $json.confidence }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "about_url"
+          ],
+          "schema": [
+            {
+              "id": "about_url",
+              "displayName": "about_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company_name",
+              "displayName": "company_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "icebreaker",
+              "displayName": "icebreaker",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hook_type",
+              "displayName": "hook_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "69730403-5451-4be4-834b-7f0ce69162b8",
+      "name": "Save to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        576,
+        16
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Updates the row with the generated icebreaker. Matches on 'about_url' column. Make sure your sheet has columns: about_url, company_name, icebreaker, hook_type, confidence, status"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Handle failed scrapes - prepare error message for sheets\nconst previousData = $('Parse Scraped Content').first().json;\n\nreturn [{\n  json: {\n    about_url: previousData.about_url,\n    company_name: previousData.company_name,\n    row_number: previousData.row_number,\n    icebreaker: 'Scrape failed - check URL',\n    hook_type: 'error',\n    confidence: 'none',\n    status: 'scrape_failed'\n  }\n}];"
+      },
+      "id": "7db880e3-3d61-4e90-9d4b-3fdde56132d0",
+      "name": "Handle Scrape Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        64,
+        208
+      ],
+      "notesInFlow": true,
+      "notes": "Creates an error entry for rows where scraping failed so you know which URLs to fix"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "documentId": {
+          "__rl": true,
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "mode": "list",
+          "cachedResultName": "Cold email responder",
+          "cachedResultUrl": ""
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": ""
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "about_url": "={{ $json.about_url }}",
+            "company_name": "={{ $json.company_name }}",
+            "icebreaker": "={{ $json.icebreaker }}",
+            "hook_type": "={{ $json.hook_type }}",
+            "confidence": "={{ $json.confidence }}",
+            "status": "={{ $json.status }}"
+          },
+          "matchingColumns": [
+            "about_url"
+          ],
+          "schema": [
+            {
+              "id": "about_url",
+              "displayName": "about_url",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "company_name",
+              "displayName": "company_name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "icebreaker",
+              "displayName": "icebreaker",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hook_type",
+              "displayName": "hook_type",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "confidence",
+              "displayName": "confidence",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "status",
+              "displayName": "status",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "row_number",
+              "displayName": "row_number",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "readOnly": true,
+              "removed": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "6cb3ec33-735c-44ff-bf0d-b1be3aaa578a",
+      "name": "Save Error to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [
+        352,
+        208
+      ],
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Saves the error status back to sheets so you can identify and fix problematic URLs"
+    },
+    {
+      "parameters": {
+        "modelId": {
+          "__rl": true,
+          "value": "gpt-4o-mini",
+          "mode": "list",
+          "cachedResultName": "GPT-4O-MINI"
+        },
+        "responses": {
+          "values": [
+            {
+              "role": "system",
+              "content": "You are an expert B2B sales copywriter who specializes in writing hyper-personalized cold email opening lines. Your task is to create a single, compelling icebreaker sentence that:\n\n1. References something SPECIFIC from the company's About page\n2. Shows you've done your research (not generic flattery)\n3. Creates curiosity or establishes relevance\n4. Sounds natural and human, not salesy or AI-generated\n5. Is 1-2 sentences MAX (under 40 words)\n\nOutput format must be valid JSON with this structure:\n{\n  \"icebreaker\": \"Your personalized opening line here\",\n  \"hook_type\": \"mission|growth|culture|achievement|founder\",\n  \"confidence\": \"high|medium|low\"\n}"
+            },
+            {
+              "content": "=Generate a personalized icebreaker for: {{ $json.company_name }}\n\nHere is their About page content:\n{{ $json.scraped_content }}\n\nRemember:\n- Reference something SPECIFIC (a mission statement, founding story, recent milestone, unique value prop)\n- Make it feel like you actually read their page\n- Keep it under 40 words\n- Sound human and genuine, not like a template\n- Output ONLY valid JSON, no markdown code blocks"
+            }
+          ]
+        },
+        "builtInTools": {},
+        "options": {
+          "textFormat": {
+            "textOptions": {
+              "type": "json_object"
+            }
+          }
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.openAi",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        16
+      ],
+      "id": "4ac83b60-a7a0-4aa9-b5c6-6e49eb5d1bff",
+      "name": "OpenAI - Generate Icebreaker",
+      "notesInFlow": true,
+      "credentials": {},
+      "notes": "Generates a hyper-personalized icebreaker based on the scraped About page content. Uses gpt-4o-mini for cost efficiency."
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Read from Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read from Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "Firecrawl - Scrape About Page",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Firecrawl - Scrape About Page": {
+      "main": [
+        [
+          {
+            "node": "Parse Scraped Content",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Scraped Content": {
+      "main": [
+        [
+          {
+            "node": "IF Scrape Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Scrape Success": {
+      "main": [
+        [
+          {
+            "node": "OpenAI - Generate Icebreaker",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Handle Scrape Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse OpenAI Response": {
+      "main": [
+        [
+          {
+            "node": "Save to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Handle Scrape Failure": {
+      "main": [
+        [
+          {
+            "node": "Save Error to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI - Generate Icebreaker": {
+      "main": [
+        [
+          {
+            "node": "Parse OpenAI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "availableInMCP": false
+  },
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "tags": []
+}
